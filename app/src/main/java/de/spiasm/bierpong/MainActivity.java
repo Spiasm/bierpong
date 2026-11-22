@@ -58,6 +58,7 @@ public class MainActivity extends Activity implements BtLink.Listener, PongView.
     // Computer-Gegner
     private boolean vsBot;
     private boolean botSmart;
+    private int mode = Physics.MODE_EASY;
 
     // Spielstand
     private boolean isHost;
@@ -172,6 +173,7 @@ public class MainActivity extends Activity implements BtLink.Listener, PongView.
     public void onConnected(String name) {
         peerName = name;
         toast("Verbunden mit " + name);
+        if (isHost) send("MODE " + mode);
         startGame();
     }
 
@@ -192,6 +194,14 @@ public class MainActivity extends Activity implements BtLink.Listener, PongView.
             }
             return;
         }
+        if ("MODE".equals(p[0]) && p.length > 1) {
+            try {
+                mode = Math.max(0, Math.min(3, Integer.parseInt(p[1])));
+            } catch (NumberFormatException ignored) {
+            }
+            updateTurn();
+            return;
+        }
         if ("THROW".equals(p[0]) && state == S_GAME) {
             queue.add(line);
             processQueue();
@@ -206,9 +216,10 @@ public class MainActivity extends Activity implements BtLink.Listener, PongView.
             double theta = Double.parseDouble(p[2]);
             double x0 = Double.parseDouble(p[3]);
             final int cup = Integer.parseInt(p[4]);
+            double phase = p.length > 5 ? Double.parseDouble(p[5]) : 0;
             view.cups = myCups;
             view.inputEnabled = false;
-            view.animateThrow(speed, theta, x0, (c, ex, ez) -> afterThrow(false, cup, ex, ez));
+            view.animateThrow(speed, theta, x0, phase, (c, ex, ez) -> afterThrow(false, cup, ex, ez));
         } catch (RuntimeException e) {
             processQueue();
         }
@@ -240,7 +251,10 @@ public class MainActivity extends Activity implements BtLink.Listener, PongView.
 
     private void updateTurn() {
         if (view == null) return;
-        String score = "Becher – Du: " + Physics.count(myCups) + "   " + peerName + ": " + Physics.count(oppCups);
+        view.bars = Physics.barCount(mode);
+        view.drunk = mode == Physics.MODE_REAL ? Physics.CUPS - Physics.count(myCups) : 0;
+        String score = Physics.MODE_NAMES[mode] + "  •  Du: " + Physics.count(myCups) + "   "
+                + peerName + ": " + Physics.count(oppCups) + " Becher";
         view.sub = score;
         if (myTurn) {
             view.cups = oppCups;
@@ -259,11 +273,12 @@ public class MainActivity extends Activity implements BtLink.Listener, PongView.
     @Override
     public void onThrow(double speed, double theta, double x0) {
         if (state != S_GAME || !myTurn || view.busy()) return;
-        int cup = Physics.outcome(speed, theta, x0, oppCups);
-        send("THROW " + speed + " " + theta + " " + x0 + " " + cup);
+        double phase = view.clock();
+        int cup = Physics.outcome(speed, theta, x0, oppCups, Physics.barCount(mode), phase);
+        send("THROW " + speed + " " + theta + " " + x0 + " " + cup + " " + phase);
         view.inputEnabled = false;
         view.cups = oppCups;
-        view.animateThrow(speed, theta, x0, (c, ex, ez) -> afterThrow(true, cup, ex, ez));
+        view.animateThrow(speed, theta, x0, phase, (c, ex, ez) -> afterThrow(true, cup, ex, ez));
     }
 
     @Override
@@ -292,9 +307,10 @@ public class MainActivity extends Activity implements BtLink.Listener, PongView.
         theta += random.nextGaussian() * st;
         speed = Math.round(speed * 1000) / 1000.0;
         theta = Math.round(theta * 10000) / 10000.0;
-        final int cup = Physics.outcome(speed, theta, 0, myCups);
+        double phase = view.clock();
+        final int cup = Physics.outcome(speed, theta, 0, myCups, Physics.barCount(mode), phase);
         view.cups = myCups;
-        view.animateThrow(speed, theta, 0, (c, ex, ez) -> afterThrow(false, cup, ex, ez));
+        view.animateThrow(speed, theta, 0, phase, (c, ex, ez) -> afterThrow(false, cup, ex, ez));
     }
 
     private void afterThrow(boolean mine, int cup, double endX, double endZ) {
@@ -307,17 +323,18 @@ public class MainActivity extends Activity implements BtLink.Listener, PongView.
                 view.flash("Treffer! 🍺");
                 sfx.play(Sfx.CHEER, 150);
             } else {
-                view.flash("Getroffen – trink aus! 🍺");
+                view.flash(mode == Physics.MODE_REAL ? "Trink aus! 🍺 Hicks…" : "Getroffen – trink aus! 🍺");
             }
         } else {
             if (mine) {
                 double front = Physics.CUP_POS[Physics.CUPS - 1][1] - Physics.RIM_R;
-                if (endZ < front - 0.05) view.flash("Zu kurz!");
+                if (view.lastBlocked) view.flash("Geblockt! 🚧");
+                else if (endZ < front - 0.05) view.flash("Zu kurz!");
                 else if (endZ > Physics.TABLE_L) view.flash("Zu weit!");
                 else view.flash("Daneben!");
                 sfx.play(Sfx.MISS);
             } else {
-                view.flash("Daneben – Glück gehabt!");
+                view.flash(view.lastBlocked ? "Geblockt – Glück gehabt!" : "Daneben – Glück gehabt!");
             }
         }
         throwsLeft--;
@@ -349,9 +366,9 @@ public class MainActivity extends Activity implements BtLink.Listener, PongView.
         add(text("🍺 Bierpong", 34, Color.WHITE, true));
         add(text("Wirf den Ball in die Becher –\nzu zweit per Bluetooth oder gegen den Computer", 16, 0xFFC9B8E0, false));
         if (message != null) add(text(message, 15, 0xFFFFB74D, false));
-        add(button("🛰  Spiel erstellen", BLUE, v -> withBluetooth(this::hostGame)));
+        add(button("🛰  Spiel erstellen", BLUE, v -> withBluetooth(() -> showModePick(this::hostGame))));
         add(button("🔗  Spiel beitreten", BLUE, v -> withBluetooth(this::showPick)));
-        add(button("🤖  Gegen den Computer", GREEN, v -> showBotPick()));
+        add(button("🤖  Gegen den Computer", GREEN, v -> showModePick(this::showBotPick)));
         add(row(button("📖  Regeln", BTN, v -> showRules()), soundButton()));
         add(text("Zu zweit: Handys einmal in den Bluetooth-Einstellungen koppeln. Einer tippt „Spiel erstellen“, "
                 + "der andere „Spiel beitreten“.", 14, 0xFFC9B8E0, false));
@@ -369,8 +386,36 @@ public class MainActivity extends Activity implements BtLink.Listener, PongView.
                 + "Der Ball kann am Becherrand abprallen und auf dem Tisch aufspringen – auch dann zählt er, "
                 + "wenn er noch reinfällt.\n\n"
                 + "Wer zuerst alle Becher des anderen trifft, gewinnt!\n\n"
+                + "Schwierigkeitsgrade:\n"
+                + "🙂 Einfach – ganz normal\n"
+                + "🚧 Mittel – ein wandernder Balken blockt den Ball\n"
+                + "🚧🚧 Schwer – zwei Balken\n"
+                + "🥴 Realistisch – je mehr du trinken musstest, desto mehr schwankt alles (und dein Wurf)\n\n"
                 + "Tipp: Wenn's danebengeht, steht in der Mitte „Zu kurz“ oder „Zu weit“.",
                 16, 0xFFE8DDF5, false));
+        add(button("Zurück", BTN, v -> showMenu(null)));
+    }
+
+    private void showModePick(final Runnable next) {
+        state = S_OTHER;
+        newScreen();
+        add(text("🎯 Schwierigkeitsgrad", 26, Color.WHITE, true));
+        String[] desc = {
+                "Ganz normales Bierpong",
+                "Ein rot-weißer Balken wandert über den Tisch und kann den Ball blocken",
+                "Zwei Balken wandern über den Tisch",
+                "Mit jedem Becher, den du trinken musst, schwankt dein Bild mehr – wie betrunken"};
+        int[] cols = {GREEN, BLUE, ACCENT, 0xFF8E24AA};
+        String[] icons = {"🙂", "🚧", "🚧🚧", "🥴"};
+        for (int i = 0; i < 4; i++) {
+            final int m = i;
+            Button b = button(icons[i] + "  " + Physics.MODE_NAMES[i] + "\n" + desc[i], cols[i], v -> {
+                mode = m;
+                next.run();
+            });
+            b.setTextSize(15);
+            add(b);
+        }
         add(button("Zurück", BTN, v -> showMenu(null)));
     }
 
@@ -381,7 +426,7 @@ public class MainActivity extends Activity implements BtLink.Listener, PongView.
         add(text("Wie gut soll der Computer werfen?", 16, 0xFFC9B8E0, false));
         add(button("😊  Leicht – trifft ab und zu", GREEN, v -> startBot(false)));
         add(button("😈  Normal – trifft ziemlich oft", ACCENT, v -> startBot(true)));
-        add(button("Zurück", BTN, v -> showMenu(null)));
+        add(button("Zurück", BTN, v -> showModePick(this::showBotPick)));
     }
 
     private void hostGame() {
@@ -398,6 +443,7 @@ public class MainActivity extends Activity implements BtLink.Listener, PongView.
             myName = null;
         }
         add(text("⏳ Warte auf deinen Kumpel…", 24, Color.WHITE, true));
+        add(text("Schwierigkeitsgrad: " + Physics.MODE_NAMES[mode], 16, 0xFFFFD54F, false));
         add(text("Er soll jetzt „Spiel beitreten“ tippen und dieses Handy auswählen"
                 + (myName != null ? ":\n\n📱 " + myName : "."), 16, 0xFFE8DDF5, false));
         add(button("Abbrechen", ACCENT, v -> {

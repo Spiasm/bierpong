@@ -35,7 +35,29 @@ public final class Physics {
     }
 
     public static final int RUN = 0, IN = 1, MISS = 2;
-    public static final int EV_NONE = 0, EV_TABLE = 1, EV_RIM = 2;
+    public static final int EV_NONE = 0, EV_TABLE = 1, EV_RIM = 2, EV_BAR = 3;
+
+    // Spielmodi
+    public static final int MODE_EASY = 0, MODE_MEDIUM = 1, MODE_HARD = 2, MODE_REAL = 3;
+    public static final String[] MODE_NAMES = {"Einfach", "Mittel", "Schwer", "Realistisch"};
+
+    // Wandernde Balken (Pfosten) auf dem Tisch
+    public static final double BAR_H = 1.0;   // Höhe
+    public static final double BAR_W = 0.05;  // halbe Breite
+    public static final double BAR_D = 0.03;  // halbe Tiefe
+    public static final double BAR_A = 0.24;  // wie weit sie zur Seite wandern
+    public static final double[] BAR_Z = {1.30, 0.85};
+    public static final double[] BAR_SPEED = {1.7, 2.4};
+    public static final double[] BAR_OFF = {0.0, 2.0};
+
+    public static int barCount(int mode) {
+        return mode == MODE_MEDIUM ? 1 : mode == MODE_HARD ? 2 : 0;
+    }
+
+    /** Seitliche Position von Balken i zur Zeit T (Sekunden). */
+    public static double barX(int i, double T) {
+        return BAR_A * StrictMath.sin(BAR_SPEED[i] * T + BAR_OFF[i]);
+    }
 
     /** Ein Wurf in der Simulation. */
     public static final class Sim {
@@ -45,9 +67,17 @@ public final class Physics {
         /** Ereignis im letzten Schritt (für Geräusche) */
         public int event = EV_NONE;
         private final boolean[] alive;
+        public final int bars;
+        public final double phase;
 
         public Sim(double speed, double theta, double x0, boolean[] alive) {
+            this(speed, theta, x0, alive, 0, 0);
+        }
+
+        public Sim(double speed, double theta, double x0, boolean[] alive, int bars, double phase) {
             this.alive = alive.clone();
+            this.bars = bars;
+            this.phase = phase;
             x = x0;
             y = START_Y;
             z = 0;
@@ -67,6 +97,25 @@ public final class Physics {
             y += vy * DT;
             z += vz * DT;
             boolean onTable = StrictMath.abs(x) <= TABLE_W / 2 && z >= 0 && z <= TABLE_L;
+
+            // Balken
+            for (int b = 0; b < bars; b++) {
+                double bz = BAR_Z[b], bx = barX(b, phase + t);
+                double ax = StrictMath.abs(x - bx), az = StrictMath.abs(z - bz);
+                if (y < BAR_H + BALL_R && ax < BAR_W + BALL_R && az < BAR_D + BALL_R) {
+                    double px = BAR_W + BALL_R - ax, pz = BAR_D + BALL_R - az;
+                    if (pz <= px) {
+                        double sgn = z < bz ? -1 : 1;
+                        z = bz + sgn * (BAR_D + BALL_R);
+                        if (vz * sgn < 0) vz = -vz * 0.45;
+                    } else {
+                        double sgn = x < bx ? -1 : 1;
+                        x = bx + sgn * (BAR_W + BALL_R);
+                        if (vx * sgn < 0) vx = -vx * 0.45;
+                    }
+                    event = EV_BAR;
+                }
+            }
 
             for (int i = 0; i < CUPS; i++) {
                 if (!alive[i]) continue;
@@ -121,7 +170,11 @@ public final class Physics {
 
     /** Rechnet den Wurf komplett durch. Ergebnis: getroffener Becher oder -1. */
     public static int outcome(double speed, double theta, double x0, boolean[] alive) {
-        Sim s = new Sim(speed, theta, x0, alive);
+        return outcome(speed, theta, x0, alive, 0, 0);
+    }
+
+    public static int outcome(double speed, double theta, double x0, boolean[] alive, int bars, double phase) {
+        Sim s = new Sim(speed, theta, x0, alive, bars, phase);
         while (s.state == RUN) s.step();
         return s.state == IN ? s.cup : -1;
     }

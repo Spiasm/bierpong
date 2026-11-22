@@ -39,6 +39,24 @@ public class PongView extends View {
     public String title = "", sub = "";
     public ThrowListener throwListener;
     public Sfx sfx;
+    /** Anzahl wandernder Balken (0-2) */
+    public int bars;
+    /** Wie viele Becher man schon trinken musste (Modus Realistisch), sonst 0 */
+    public int drunk;
+    /** Wurde der letzte Ball von einem Balken geblockt? */
+    public boolean lastBlocked;
+    private final long clockStart = SystemClock.uptimeMillis();
+
+    /** Spieluhr in Sekunden (gerundet, damit beide Handys dieselbe Zahl haben). */
+    public double clock() {
+        double t = ((SystemClock.uptimeMillis() - clockStart) / 1000.0) % 10000.0;
+        return Math.round(t * 10000) / 10000.0;
+    }
+
+    private double barTime() {
+        if (sim != null) return sim.phase + sim.t;
+        return (SystemClock.uptimeMillis() - clockStart) / 1000.0 % 10000.0;
+    }
 
     private float F, horizon;
     private final float[] p = new float[3];
@@ -113,8 +131,9 @@ public class PongView extends View {
     }
 
     /** Wurf abspielen. Die Becher am anderen Ende sind {@link #cups}. */
-    public void animateThrow(double speed, double theta, double x0, DoneListener listener) {
-        sim = new Physics.Sim(speed, theta, x0, cups);
+    public void animateThrow(double speed, double theta, double x0, double phase, DoneListener listener) {
+        sim = new Physics.Sim(speed, theta, x0, cups, bars, phase);
+        lastBlocked = false;
         done = listener;
         acc = 0;
         lastFrame = SystemClock.uptimeMillis();
@@ -149,32 +168,58 @@ public class PongView extends View {
 
         advance(now);
 
+        // Betrunken: Bild schwankt
+        float sway = 0;
+        c.save();
+        if (drunk > 0) {
+            double t = (now - clockStart) / 1000.0;
+            sway = (float) Math.sin(t * 0.9);
+            float rot = drunk * 0.9f * sway;
+            float dx = (float) (drunk * w * 0.006 * Math.sin(t * 0.7 + 1));
+            float dy = (float) (drunk * w * 0.004 * Math.sin(t * 1.3));
+            float sc = 1f + drunk * 0.012f;
+            c.translate(dx, dy);
+            c.rotate(rot, w / 2, h / 2);
+            c.scale(sc, sc, w / 2, h / 2);
+        }
+
         drawRoom(c, w, h);
         drawTable(c);
 
-        // Becher und Ball nach Tiefe sortiert (hinten zuerst)
-        boolean ballDrawn = sim == null || sim.state == Physics.IN;
-        Integer[] order = new Integer[Physics.CUPS];
-        for (int i = 0; i < order.length; i++) order[i] = i;
-        java.util.Arrays.sort(order, (a, b) -> Double.compare(Physics.CUP_POS[b][1], Physics.CUP_POS[a][1]));
-        for (int i : order) {
-            double cz = Physics.CUP_POS[i][1];
-            if (!ballDrawn && sim.z > cz) {
-                drawBall(c, sim.x, sim.y, sim.z);
-                ballDrawn = true;
-            }
-            float alpha = 1f;
-            if (i == hitCup) alpha = Math.max(0f, 1f - (now - hitTime) / 700f);
-            if (cups[i] && alpha > 0) drawCup(c, Physics.CUP_POS[i][0], cz, alpha, i == hitCup);
+        // Becher, Balken und Ball nach Tiefe sortiert (hinten zuerst)
+        double barT = barTime();
+        int nCups = Physics.CUPS;
+        int nItems = nCups + bars + 1;
+        double[] depth = new double[nItems];
+        Integer[] order = new Integer[nItems];
+        for (int i = 0; i < nItems; i++) {
+            order[i] = i;
+            if (i < nCups) depth[i] = Physics.CUP_POS[i][1];
+            else if (i < nCups + bars) depth[i] = Physics.BAR_Z[i - nCups] + Physics.BAR_D;
+            else depth[i] = sim != null ? sim.z : -9;
         }
-        if (!ballDrawn) drawBall(c, sim.x, sim.y, sim.z);
+        java.util.Arrays.sort(order, (a, b) -> Double.compare(depth[b], depth[a]));
+        for (int i : order) {
+            if (i < nCups) {
+                float alpha = 1f;
+                if (i == hitCup) alpha = Math.max(0f, 1f - (now - hitTime) / 700f);
+                if (cups[i] && alpha > 0) drawCup(c, Physics.CUP_POS[i][0], Physics.CUP_POS[i][1], alpha, i == hitCup);
+            } else if (i < nCups + bars) {
+                int b = i - nCups;
+                drawBar(c, Physics.barX(b, barT), Physics.BAR_Z[b]);
+            } else if (sim != null && sim.state != Physics.IN) {
+                drawBall(c, sim.x, sim.y, sim.z);
+            }
+        }
 
         drawDrops(c, now);
+        c.restore();
+        if (drunk > 0) drawVignette(c, w, h);
         drawHand(c, w, h);
         drawHud(c, w, h);
         drawFlash(c, w, h, now);
 
-        if (sim != null || !drops.isEmpty() || holding) postInvalidateOnAnimation();
+        if (sim != null || !drops.isEmpty() || holding || bars > 0 || drunk > 0) postInvalidateOnAnimation();
     }
 
     private void advance(long now) {
@@ -187,6 +232,11 @@ public class PongView extends View {
                 sim.step();
                 acc -= Physics.DT;
                 if (sim.event == Physics.EV_TABLE && sfx != null) sfx.play(Sfx.TABLE);
+                if (sim.event == Physics.EV_BAR) lastBlocked = true;
+                if (sim.event == Physics.EV_BAR && sfx != null && now - lastRimSound > 90) {
+                    lastRimSound = now;
+                    sfx.play(Sfx.BAR);
+                }
                 if (sim.event == Physics.EV_RIM && sfx != null && now - lastRimSound > 90) {
                     lastRimSound = now;
                     sfx.play(Sfx.RIM);
@@ -385,7 +435,85 @@ public class PongView extends View {
         fill.setAlpha(255);
     }
 
+    /** Rot-weißer Pfosten auf dem Tisch. */
+    private void drawBar(Canvas c, double bx, double bz) {
+        double x0 = bx - Physics.BAR_W, x1 = bx + Physics.BAR_W;
+        double zf = bz - Physics.BAR_D, zb = bz + Physics.BAR_D, H = Physics.BAR_H;
+        // Schatten
+        proj(x0 + 0.02, 0, zf, p);
+        proj(x1 + 0.05, 0, zb + 0.04, q);
+        fill.setColor(0x55000000);
+        c.drawRect(Math.min(p[0], q[0]), q[1], Math.max(p[0], q[0]), p[1], fill);
+        // Seitenfläche (die zur Mitte zeigende ist sichtbar)
+        double xs = bx > 0 ? x0 : x1;
+        path.reset();
+        proj(xs, 0, zf, p);
+        path.moveTo(p[0], p[1]);
+        proj(xs, H, zf, p);
+        path.lineTo(p[0], p[1]);
+        proj(xs, H, zb, p);
+        path.lineTo(p[0], p[1]);
+        proj(xs, 0, zb, p);
+        path.lineTo(p[0], p[1]);
+        path.close();
+        fill.setColor(0xFF9E1B1B);
+        c.drawPath(path, fill);
+        // Vorderseite mit Streifen
+        int bands = 8;
+        for (int k = 0; k < bands; k++) {
+            double ya = H * k / bands, yb = H * (k + 1) / bands;
+            path.reset();
+            proj(x0, ya, zf, p);
+            path.moveTo(p[0], p[1]);
+            proj(x1, ya, zf, p);
+            path.lineTo(p[0], p[1]);
+            proj(x1, yb, zf, p);
+            path.lineTo(p[0], p[1]);
+            proj(x0, yb, zf, p);
+            path.lineTo(p[0], p[1]);
+            path.close();
+            fill.setColor(k % 2 == 0 ? 0xFFE53935 : 0xFFF5F5F5);
+            c.drawPath(path, fill);
+        }
+        // Oberseite
+        path.reset();
+        proj(x0, H, zf, p);
+        path.moveTo(p[0], p[1]);
+        proj(x1, H, zf, p);
+        path.lineTo(p[0], p[1]);
+        proj(x1, H, zb, p);
+        path.lineTo(p[0], p[1]);
+        proj(x0, H, zb, p);
+        path.lineTo(p[0], p[1]);
+        path.close();
+        fill.setColor(0xFFFFCDD2);
+        c.drawPath(path, fill);
+        // Umriss
+        stroke.setColor(0x88000000);
+        proj(x0, 0, zf, p);
+        proj(x1, H, zf, q);
+        stroke.setStrokeWidth(Math.max(1.5f, getWidth() * 0.003f));
+        c.drawRect(Math.min(p[0], q[0]), q[1], Math.max(p[0], q[0]), p[1], stroke);
+    }
+
+    private RadialGradient vignette;
+    private int vignetteLevel = -1;
+
+    private void drawVignette(Canvas c, float w, float h) {
+        if (vignette == null || vignetteLevel != drunk) {
+            vignetteLevel = drunk;
+            int a = Math.min(200, 40 + drunk * 18);
+            vignette = new RadialGradient(w / 2, h / 2, (float) Math.hypot(w, h) * 0.55f,
+                    new int[]{0x00000000, 0x00000000, (a << 24) | 0x1A0010},
+                    new float[]{0f, 0.55f, 1f}, Shader.TileMode.CLAMP);
+        }
+        fill.setShader(vignette);
+        c.drawRect(0, 0, w, h, fill);
+        fill.setShader(null);
+    }
+
     private void drawBall(Canvas c, double x, double y, double z) {
+        if (y < -0.005) return; // unter Tischhöhe = hinter/neben dem Tisch verschwunden
         // Schatten auf dem Tisch
         if (Math.abs(x) < Physics.TABLE_W / 2 && z > 0 && z < Physics.TABLE_L && y > -0.01) {
             proj(x, 0, z, p);
@@ -518,6 +646,11 @@ public class PongView extends View {
                 double speed = Math.max(2.0, Math.min(7.0, 2.2 + vn * 0.55));
                 double theta = Math.max(-0.4, Math.min(0.4, Math.atan2(vx, -vy) * 0.4));
                 double x0 = Math.max(-0.15, Math.min(0.15, (downX - getWidth() / 2f) / getWidth() * 0.25));
+                if (drunk > 0) {
+                    double t = (now - clockStart) / 1000.0;
+                    theta += Math.sin(t * 0.9) * drunk * 0.004 + Math.sin(t * 2.3) * drunk * 0.002;
+                    speed *= 1 + Math.sin(t * 1.7) * drunk * 0.004;
+                }
                 // Werte runden, damit beide Handys exakt dieselben Zahlen haben
                 speed = Math.round(speed * 1000) / 1000.0;
                 theta = Math.round(theta * 10000) / 10000.0;

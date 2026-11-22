@@ -10,7 +10,7 @@ import java.util.Random;
 
 /** Geräusche – werden beim Start im Programm erzeugt, keine Sounddateien nötig. */
 public class Sfx {
-    public static final int THROW = 0, TABLE = 1, RIM = 2, PLOP = 3, CHEER = 4, MISS = 5, WIN = 6, LOSE = 7;
+    public static final int THROW = 0, TABLE = 1, RIM = 2, PLOP = 3, CHEER = 4, MISS = 5, WIN = 6, LOSE = 7, BAR = 8;
     private static final int RATE = 22050;
 
     private volatile short[][] data;
@@ -63,7 +63,8 @@ public class Sfx {
 
     private void build() {
         Random rnd = new Random(3);
-        short[][] d = new short[8][];
+        short[][] d = new short[9][];
+        d[BAR] = pcm(knock(380, 0.2f, 25, rnd), 0.8f);
         d[THROW] = pcm(whoosh(rnd), 0.6f);
         d[TABLE] = pcm(knock(900, 0.12f, 60, rnd), 0.7f);
         d[RIM] = pcm(rim(rnd), 0.8f);
