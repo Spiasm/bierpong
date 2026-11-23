@@ -372,6 +372,7 @@ public class MainActivity extends Activity implements BtLink.Listener, PongView.
         add(row(button("📖  Regeln", BTN, v -> showRules()), soundButton()));
         add(text("Zu zweit: Handys einmal in den Bluetooth-Einstellungen koppeln. Einer tippt „Spiel erstellen“, "
                 + "der andere „Spiel beitreten“.", 14, 0xFFC9B8E0, false));
+        add(text("© 2026 SM", 12, 0xFF8E7FA6, false));
     }
 
     private void showRules() {
@@ -393,6 +394,7 @@ public class MainActivity extends Activity implements BtLink.Listener, PongView.
                 + "🥴 Realistisch – je mehr du trinken musstest, desto mehr schwankt alles (und dein Wurf)\n\n"
                 + "Tipp: Wenn's danebengeht, steht in der Mitte „Zu kurz“ oder „Zu weit“.",
                 16, 0xFFE8DDF5, false));
+        add(text("© 2026 SM", 12, 0xFF8E7FA6, false));
         add(button("Zurück", BTN, v -> showMenu(null)));
     }
 
